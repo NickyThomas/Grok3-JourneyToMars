@@ -7,3 +7,5 @@ S - Move Backwards
 D - Rotate Clockwise
 
 Spacebar - Shoot lasers
+
+Try the game -> https://gwyr.net/x/games/mars/
