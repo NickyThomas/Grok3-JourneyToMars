@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Rocket to Mars</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+            background: #000033;
+            cursor: pointer;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: #000022;
+        }
+        #namePrompt {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border: 2px solid black;
+            text-align: center;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="namePrompt">
+        <p>Enter your name:</p>
+        <input type="text" id="playerName" maxlength="20">
+        <br><br>
+        <button onclick="submitScore()">Submit</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const namePrompt = document.getElementById('namePrompt');
+        const playerNameInput = document.getElementById('playerName');
+
+        // Sound effects
+        const shootSound = new Audio('./assets/shoot.mp3');
+        const explosionSound = new Audio('./assets/explosion.mp3');
+        const successSound = new Audio('./assets/success.mp3');
+
+        // Load images
+        const elonImage = new Image();
+        elonImage.src = './assets/elon_mars.jpg';
+        const rocketImage = new Image();
+        rocketImage.src = './assets/rocket.png';
+        const marsImage = new Image();
+        marsImage.src = './assets/mars.png';
+
+        // Power-up images (placeholders)
+        const fullFuelImage = new Image();
+        fullFuelImage.src = './assets/full_fuel.png'; // Placeholder: Add your image
+        const fullHealthImage = new Image();
+        fullHealthImage.src = './assets/full_health.png'; // Placeholder: Add your image
+        const fullLaserImage = new Image();
+        fullLaserImage.src = './assets/full_laser.png'; // Placeholder: Add your image
+        const doubleLaserImage = new Image();
+        doubleLaserImage.src = './assets/double_laser.png'; // Placeholder: Add your image
+
+        // Game objects
+        const rocket = {
+            x: 400,
+            y: 500,
+            width: 30,
+            height: 60,
+            dx: 0,
+            dy: 0,
+            angle: -Math.PI / 2, // Start pointing up (front toward Mars)
+            rotationSpeed: 0.05,
+            thrust: 5
+        };
+
+        const mars = {
+            x: 350,
+            y: -50,
+            baseWidth: 80,
+            baseHeight: 80,
+            width: 80,
+            height: 80,
+            radius: 40
+        };
+
+        let obstacles = [];
+        let missiles = [];
+        let fragments = [];
+        let powerUps = [];
+        let gameState = 'start';
+        let score = 0;
+        let highScore = 0;
+        let highScoresList = [];
+        let missionSuccess = false;
+        let laserCharge = 100;
+        let fuelLevel = 50;
+        let fuelTimer = 0;
+        let health = 100;
+        let doubleLaserActive = false;
+        let doubleLaserTimer = 0;
+        let powerUpMessage = '';
+        let powerUpMessageTimer = 0;
+        let nameSubmitted = false; // Track if name has been submitted
+        let assetsLoaded = 0;
+        let totalAssets = 7; // Updated for power-up images
+
+        // Controls
+        const keys = {
+            w: false,
+            s: false,
+            a: false,
+            d: false,
+            space: false
+        };
+
+        // Power-up types
+        const powerUpTypes = [
+            { name: 'Full Fuel', image: fullFuelImage, effect: () => fuelLevel = 50 },
+            { name: 'Full Health', image: fullHealthImage, effect: () => health = 100 },
+            { name: 'Full Laser', image: fullLaserImage, effect: () => laserCharge = 100 },
+            { name: 'Double Laser', image: doubleLaserImage, effect: () => { doubleLaserActive = true; doubleLaserTimer = 600; } }
+        ];
+
+        // Menu options
+        const menuOptions = [
+            { text: 'Start Game', action: () => { gameState = 'playing'; resetGame(); }, x: 0, y: 0, width: 0, height: 0 },
+            { text: 'High Scores', action: () => { gameState = 'highScores'; loadHighScores(); }, x: 0, y: 0, width: 0, height: 0 },
+            { text: 'Visit Nicky Thomas on X', action: () => { window.open('https://www.x.com/NickyThomas', '_blank'); }, x: 0, y: 0, width: 0, height: 0 }
+        ];
+        let selectedOption = 0;
+
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            if (gameState === 'start') {
+                switch(e.key) {
+                    case 'ArrowUp': selectedOption = Math.max(0, selectedOption - 1); break;
+                    case 'ArrowDown': selectedOption = Math.min(menuOptions.length - 1, selectedOption + 1); break;
+                    case 'Enter': menuOptions[selectedOption].action(); break;
+                }
+            } else if (gameState === 'playing') {
+                switch(e.key.toLowerCase()) {
+                    case 'w': keys.w = true; break;
+                    case 's': keys.s = true; break;
+                    case 'a': keys.a = true; break;
+                    case 'd': keys.d = true; break;
+                    case ' ': keys.space = true; fireMissile(); break;
+                }
+            } else if (gameState === 'gameOver' && nameSubmitted) {
+                if (e.key === ' ') {
+                    gameState = 'start';
+                    selectedOption = 0;
+                    nameSubmitted = false; // Reset for next game over
+                }
+            } else if (gameState === 'highScores') {
+                if (e.key === ' ') {
+                    gameState = 'start';
+                    selectedOption = 0;
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (gameState === 'playing') {
+                switch(e.key.toLowerCase()) {
+                    case 'w': keys.w = false; break;
+                    case 's': keys.s = false; break;
+                    case 'a': keys.a = false; break;
+                    case 'd': keys.d = false; break;
+                    case ' ': keys.space = false; break;
+                }
+            }
+        });
+
+        canvas.addEventListener('click', (e) => {
+            if (gameState !== 'start') return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            for (let i = 0; i < menuOptions.length; i++) {
+                const opt = menuOptions[i];
+                if (mouseX >= opt.x && mouseX <= opt.x + opt.width &&
+                    mouseY >= opt.y && mouseY <= opt.y + opt.height) {
+                    opt.action();
+                    break;
+                }
+            }
+        });
+
+        // Asset loading
+        function checkAssetsLoaded(assetName) {
+            assetsLoaded++;
+            console.log(`${assetName} loaded successfully. Total loaded: ${assetsLoaded}/${totalAssets}`);
+            if (assetsLoaded === totalAssets) {
+                console.log('All assets loaded, starting game...');
+                gameLoop();
+            }
+        }
+
+        elonImage.onload = () => checkAssetsLoaded('Elon Image');
+        rocketImage.onload = () => checkAssetsLoaded('Rocket Image');
+        marsImage.onload = () => checkAssetsLoaded('Mars Image');
+        fullFuelImage.onload = () => checkAssetsLoaded('Full Fuel Image');
+        fullHealthImage.onload = () => checkAssetsLoaded('Full Health Image');
+        fullLaserImage.onload = () => checkAssetsLoaded('Full Laser Image');
+        doubleLaserImage.onload = () => checkAssetsLoaded('Double Laser Image');
+
+        elonImage.onerror = () => console.error('Failed to load ./assets/elon_mars.jpg');
+        rocketImage.onerror = () => console.error('Failed to load ./assets/rocket.png');
+        marsImage.onerror = () => console.error('Failed to load ./assets/mars.png');
+        fullFuelImage.onerror = () => console.error('Failed to load ./assets/full_fuel.png');
+        fullHealthImage.onerror = () => console.error('Failed to load ./assets/full_health.png');
+        fullLaserImage.onerror = () => console.error('Failed to load ./assets/full_laser.png');
+        doubleLaserImage.onerror = () => console.error('Failed to load ./assets/double_laser.png');
+
+        ctx.fillStyle = 'white';
+        ctx.font = '30px Arial';
+        ctx.fillText('Loading...', canvas.width/2 - 70, canvas.height/2);
+
+        setTimeout(() => {
+            if (assetsLoaded < totalAssets) {
+                console.warn(`Only ${assetsLoaded}/${totalAssets} assets loaded after 5 seconds. Starting game with fallbacks...`);
+                gameLoop();
+            }
+        }, 5000);
+
+        function fireMissile() {
+            if (laserCharge > 0) {
+                const missileSpeed = 8;
+                // Shoot from the front (top) of the rocket
+                const missileX = rocket.x + rocket.width / 2 + Math.cos(rocket.angle) * (rocket.height / 2);
+                const missileY = rocket.y + rocket.height / 2 + Math.sin(rocket.angle) * (rocket.height / 2);
+                missiles.push({
+                    x: missileX,
+                    y: missileY,
+                    width: 4,
+                    height: 10,
+                    dx: Math.cos(rocket.angle) * missileSpeed,
+                    dy: Math.sin(rocket.angle) * missileSpeed
+                });
+
+                if (doubleLaserActive) {
+                    // Second parallel laser 10px to the right
+                    missiles.push({
+                        x: missileX + Math.cos(rocket.angle + Math.PI / 2) * 10,
+                        y: missileY + Math.sin(rocket.angle + Math.PI / 2) * 10,
+                        width: 4,
+                        height: 10,
+                        dx: Math.cos(rocket.angle) * missileSpeed,
+                        dy: Math.sin(rocket.angle) * missileSpeed
+                    });
+                }
+
+                laserCharge--;
+                shootSound.play().catch(() => console.error('Failed to play shoot sound'));
+            }
+        }
+
+        function spawnObstacle() {
+            const size = Math.random() * 30 + 20;
+            let x, y = -size, overlaps;
+            do {
+                x = Math.random() * (canvas.width - size);
+                overlaps = obstacles.some(ob => {
+                    const dx = x - ob.x;
+                    const dy = y - ob.y;
+                    return Math.sqrt(dx*dx + dy*dy) < (size/2 + ob.radius + 20);
+                });
+            } while (overlaps);
+
+            obstacles.push({
+                x: x,
+                y: y,
+                radius: size/2,
+                speed: Math.random() * 1 + 0.5
+            });
+        }
+
+        function spawnPowerUp() {
+            if (powerUps.length === 0 && Math.random() < 0.01) {
+                const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
+                const x = Math.random() * (canvas.width - 20);
+                const y = -20;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 2 + 1;
+                powerUps.push({
+                    x: x,
+                    y: y,
+                    width: 20,
+                    height: 20,
+                    dx: Math.cos(angle) * speed,
+                    dy: Math.sin(angle) * speed,
+                    type: type
+                });
+            }
+        }
+
+        function createFragments(x, y, radius) {
+            const numFragments = Math.floor(Math.random() * 3) + 2;
+            for (let i = 0; i < numFragments; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 3 + 1;
+                fragments.push({
+                    x: x,
+                    y: y,
+                    radius: radius / 2,
+                    dx: Math.cos(angle) * speed,
+                    dy: Math.sin(angle) * speed,
+                    life: 60
+                });
+            }
+        }
+
+        function updateMarsSize() {
+            const scale = Math.min(10, 1 + (score / 300));
+            mars.width = mars.baseWidth * scale;
+            mars.height = mars.baseHeight * scale;
+            mars.radius = mars.width / 2;
+            mars.x = 350 - (mars.width - mars.baseWidth) / 2;
+            mars.y = -50 - (mars.height - mars.baseHeight) / 2;
+        }
+
+        function loadHighScores() {
+            fetch('./scores.txt')
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to fetch scores.txt');
+                    return response.text();
+                })
+                .then(text => {
+                    highScoresList = text.split('\n')
+                        .map(line => {
+                            const [name, score] = line.split(':');
+                            return { name: name?.trim(), score: parseInt(score?.trim()) };
+                        })
+                        .filter(entry => entry.name && !isNaN(entry.score))
+                        .sort((a, b) => b.score - a.score)
+                        .slice(0, 10);
+                    console.log('High scores loaded:', highScoresList);
+                })
+                .catch(err => {
+                    console.error('Error loading scores.txt:', err);
+                    highScoresList = highScore > 0 ? [{ name: 'Player', score: highScore }] : [];
+                });
+        }
+
+        function submitScore() {
+            const playerName = playerNameInput.value.trim() || 'Anonymous';
+            namePrompt.style.display = 'none';
+            const data = `${playerName}:${score}\n`;
+
+            console.log('Attempting to save score:', data);
+
+            fetch('./save_score.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: data
+            })
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+                return response.text();
+            })
+            .then(result => {
+                console.log('Server response:', result);
+                nameSubmitted = true; // Mark name as submitted, wait for key press
+            })
+            .catch(err => {
+                console.error('Error saving score:', err);
+                alert('Failed to save score. Check console for details.');
+                nameSubmitted = true; // Still allow continuation on error
+            });
+        }
+
+        function showNamePrompt() {
+            namePrompt.style.display = 'block';
+            playerNameInput.value = '';
+            playerNameInput.focus();
+            nameSubmitted = false; // Reset on new prompt
+        }
+
+        function update() {
+            if (gameState !== 'playing') return;
+
+            // Rotate rocket
+            if (keys.a) rocket.angle -= rocket.rotationSpeed;
+            if (keys.d) rocket.angle += rocket.rotationSpeed;
+
+            // Thrust forward or backward only when keys are pressed
+            rocket.dx = 0;
+            rocket.dy = 0;
+            if (keys.w) {
+                rocket.dx = Math.cos(rocket.angle) * rocket.thrust;
+                rocket.dy = Math.sin(rocket.angle) * rocket.thrust;
+            }
+            if (keys.s) {
+                rocket.dx = -Math.cos(rocket.angle) * rocket.thrust;
+                rocket.dy = -Math.sin(rocket.angle) * rocket.thrust;
+            }
+
+            // Move rocket
+            rocket.x += rocket.dx;
+            rocket.y += rocket.dy;
+
+            // Keep rocket in bounds
+            rocket.x = Math.max(0, Math.min(canvas.width - rocket.width, rocket.x));
+            rocket.y = Math.max(0, Math.min(canvas.height - rocket.height, rocket.y));
+
+            // Update missiles
+            missiles.forEach((missile, mIndex) => {
+                missile.x += missile.dx;
+                missile.y += missile.dy;
+                if (missile.x < 0 || missile.x > canvas.width || missile.y < 0 || missile.y > canvas.height) {
+                    missiles.splice(mIndex, 1);
+                }
+            });
+
+            // Update fuel (visual only)
+            fuelTimer++;
+            if (fuelTimer >= 600) {
+                fuelLevel--;
+                fuelTimer = 0;
+                if (fuelLevel < 0) fuelLevel = 0;
+            }
+
+            // Update double laser timer
+            if (doubleLaserActive) {
+                doubleLaserTimer--;
+                if (doubleLaserTimer <= 0) doubleLaserActive = false;
+            }
+
+            // Update power-up message timer
+            if (powerUpMessageTimer > 0) {
+                powerUpMessageTimer--;
+                if (powerUpMessageTimer <= 0) powerUpMessage = '';
+            }
+
+            updateMarsSize();
+
+            // Update obstacles
+            obstacles.forEach((obstacle, oIndex) => {
+                obstacle.y += obstacle.speed;
+
+                if (obstacle.y > canvas.height) {
+                    obstacles.splice(oIndex, 1);
+                    score += 10;
+                    return;
+                }
+
+                // Check collision with rocket (big asteroid)
+                const dx = rocket.x + rocket.width/2 - obstacle.x;
+                const dy = rocket.y + rocket.height/2 - obstacle.y;
+                if (Math.sqrt(dx*dx + dy*dy) < obstacle.radius + rocket.width/2) {
+                    health -= 25;
+                    if (health <= 0) {
+                        gameState = 'gameOver';
+                        missionSuccess = false;
+                        explosionSound.play().catch(() => console.error('Failed to play explosion sound'));
+                        showNamePrompt();
+                    }
+                }
+
+                // Check collision with missiles
+                missiles.forEach((missile, mIndex) => {
+                    const mdx = missile.x - obstacle.x;
+                    const mdy = missile.y - obstacle.y;
+                    if (Math.sqrt(mdx*mdx + mdy*mdy) < obstacle.radius) {
+                        createFragments(obstacle.x, obstacle.y, obstacle.radius);
+                        obstacles.splice(oIndex, 1);
+                        missiles.splice(mIndex, 1);
+                        score += 50;
+                        explosionSound.play().catch(() => console.error('Failed to play explosion sound'));
+                    }
+                });
+
+                // Check collision with other obstacles
+                obstacles.forEach((other, otherIndex) => {
+                    if (oIndex !== otherIndex) {
+                        const odx = obstacle.x - other.x;
+                        const ody = obstacle.y - other.y;
+                        const distance = Math.sqrt(odx*odx + ody*ody);
+                        if (distance < obstacle.radius + other.radius) {
+                            createFragments(obstacle.x, obstacle.y, obstacle.radius);
+                            createFragments(other.x, other.y, other.radius);
+                            obstacles.splice(Math.max(oIndex, otherIndex), 1);
+                            obstacles.splice(Math.min(oIndex, otherIndex), 1);
+                            explosionSound.play().catch(() => console.error('Failed to play explosion sound'));
+                            score += 20;
+                        }
+                    }
+                });
+            });
+
+            // Update fragments
+            fragments.forEach((fragment, fIndex) => {
+                fragment.x += fragment.dx;
+                fragment.y += fragment.dy;
+                fragment.life--;
+                if (fragment.life <= 0 || fragment.x < 0 || fragment.x > canvas.width || fragment.y > canvas.height) {
+                    fragments.splice(fIndex, 1);
+                } else {
+                    const fdx = rocket.x + rocket.width/2 - fragment.x;
+                    const fdy = rocket.y + rocket.height/2 - fragment.y;
+                    if (Math.sqrt(fdx*fdx + fdy*fdy) < fragment.radius + rocket.width/2) {
+                        health -= 5;
+                        fragments.splice(fIndex, 1);
+                        if (health <= 0) {
+                            gameState = 'gameOver';
+                            missionSuccess = false;
+                            explosionSound.play().catch(() => console.error('Failed to play explosion sound'));
+                            showNamePrompt();
+                        }
+                    }
+                }
+            });
+
+            // Update power-ups
+            spawnPowerUp();
+            powerUps.forEach((powerUp, pIndex) => {
+                powerUp.x += powerUp.dx;
+                powerUp.y += powerUp.dy;
+
+                if (powerUp.x < -powerUp.width || powerUp.x > canvas.width || powerUp.y < -powerUp.height || powerUp.y > canvas.height) {
+                    powerUps.splice(pIndex, 1);
+                } else {
+                    // Check collision with rocket
+                    const pdx = rocket.x + rocket.width/2 - powerUp.x - powerUp.width/2;
+                    const pdy = rocket.y + rocket.height/2 - powerUp.y - powerUp.height/2;
+                    if (Math.sqrt(pdx*pdx + pdy*pdy) < (rocket.width/2 + powerUp.width/2)) {
+                        powerUp.type.effect();
+                        powerUpMessage = powerUp.type.name;
+                        powerUpMessageTimer = 180; // 3 seconds at 60 FPS
+                        powerUps.splice(pIndex, 1);
+                    }
+                }
+            });
+
+            // Check if reached Mars
+            const marsDx = rocket.x + rocket.width/2 - (mars.x + mars.radius);
+            const marsDy = rocket.y + rocket.height/2 - (mars.y + mars.radius);
+            if (Math.sqrt(marsDx*marsDx + marsDy*marsDy) < mars.radius + rocket.width/2) {
+                gameState = 'gameOver';
+                missionSuccess = true;
+                successSound.play().catch(() => console.error('Failed to play success sound'));
+                showNamePrompt();
+            }
+
+            if (Math.random() < 0.02) spawnObstacle();
+
+            if (score > highScore) highScore = score;
+        }
+
+        function drawAsteroid(obstacle) {
+            ctx.fillStyle = 'gray';
+            ctx.beginPath();
+            ctx.arc(obstacle.x, obstacle.y, obstacle.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = 'darkgray';
+            for (let i = 0; i < 3; i++) {
+                const craterX = obstacle.x + (Math.random() - 0.5) * obstacle.radius;
+                const craterY = obstacle.y + (Math.random() - 0.5) * obstacle.radius;
+                const craterRadius = obstacle.radius * 0.2;
+                if (Math.sqrt((craterX - obstacle.x)**2 + (craterY - obstacle.y)**2) < obstacle.radius - craterRadius) {
+                    ctx.beginPath();
+                    ctx.arc(craterX, craterY, craterRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        function drawFragment(fragment) {
+            ctx.fillStyle = 'gray';
+            ctx.beginPath();
+            ctx.arc(fragment.x, fragment.y, fragment.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function drawPowerUp(powerUp) {
+            if (powerUp.type.image.complete) {
+                ctx.drawImage(powerUp.type.image, powerUp.x, powerUp.y, powerUp.width, powerUp.height);
+            } else {
+                ctx.fillStyle = powerUp.type.color; // Fallback if image not loaded
+                ctx.fillRect(powerUp.x, powerUp.y, powerUp.width, powerUp.height);
+            }
+        }
+
+        function drawEnergyBar() {
+            const barWidth = 200;
+            const barHeight = 20;
+            const barX = canvas.width - barWidth - 10;
+            const barY = canvas.height - barHeight - 10;
+
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+
+            ctx.fillStyle = 'yellow';
+            const chargeWidth = (laserCharge / 100) * barWidth;
+            ctx.fillRect(barX, barY, chargeWidth, barHeight);
+
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText('Laser Charge', barX, barY - 5);
+        }
+
+        function drawFuelBar() {
+            const barWidth = 200;
+            const barHeight = 20;
+            const barX = 10;
+            const barY = canvas.height - barHeight - 10;
+
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+
+            ctx.fillStyle = 'green';
+            const fuelWidth = (fuelLevel / 50) * barWidth;
+            ctx.fillRect(barX, barY, fuelWidth, barHeight);
+
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText('Fuel Level', barX, barY - 5);
+        }
+
+        function drawHealthBar() {
+            const barWidth = 200;
+            const barHeight = 20;
+            const barX = canvas.width / 2 - barWidth / 2;
+            const barY = canvas.height - barHeight - 10;
+
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+
+            ctx.fillStyle = 'red';
+            const healthWidth = (health / 100) * barWidth;
+            ctx.fillRect(barX, barY, healthWidth, barHeight);
+
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText('Health', barX, barY - 5);
+        }
+
+        function drawStartScreen() {
+            ctx.fillStyle = '#000033';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'white';
+            for (let i = 0; i < 100; i++) {
+                ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 1, 1);
+            }
+
+            const marsX = canvas.width/2 - mars.baseWidth/2;
+            const marsY = canvas.height/2 - mars.baseHeight/2 - 100;
+            if (marsImage.complete) {
+                ctx.drawImage(marsImage, marsX, marsY, mars.baseWidth, mars.baseHeight);
+            } else {
+                ctx.fillStyle = 'red';
+                ctx.fillRect(marsX, marsY, mars.baseWidth, mars.baseHeight);
+            }
+
+            ctx.font = '30px Arial';
+            const baseY = canvas.height/2;
+            const lineHeight = 50;
+            const padding = 10;
+
+            for (let i = 0; i < menuOptions.length; i++) {
+                const textWidth = ctx.measureText(menuOptions[i].text).width;
+                const textX = canvas.width/2 - textWidth/2;
+                const y = baseY + i * lineHeight;
+
+                ctx.fillStyle = i === selectedOption ? 'yellow' : 'white';
+                ctx.fillText(menuOptions[i].text, textX, y);
+
+                menuOptions[i].x = textX - padding;
+                menuOptions[i].y = y - 25;
+                menuOptions[i].width = textWidth + padding * 2;
+                menuOptions[i].height = 30 + padding;
+            }
+        }
+
+        function drawHighScores() {
+            ctx.fillStyle = '#000033';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'white';
+            for (let i = 0; i < 100; i++) {
+                ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 1, 1);
+            }
+
+            ctx.fillStyle = 'white';
+            ctx.font = '40px Arial';
+            ctx.fillText('High Scores', canvas.width/2 - 120, canvas.height/2 - 150);
+
+            ctx.font = '20px Arial';
+            if (highScoresList.length === 0) {
+                ctx.fillText('No scores yet!', canvas.width/2 - 70, canvas.height/2);
+            } else {
+                highScoresList.forEach((entry, index) => {
+                    ctx.fillText(`${index + 1}. ${entry.name}: ${entry.score}`, canvas.width/2 - 100, canvas.height/2 - 80 + index * 30);
+                });
+            }
+
+            ctx.fillText('Press space bar to return', canvas.width/2 - 120, canvas.height/2 + 200);
+        }
+
+        function draw() {
+            if (gameState === 'start') {
+                drawStartScreen();
+            } else if (gameState === 'highScores') {
+                drawHighScores();
+            } else {
+                ctx.fillStyle = '#000033';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = 'white';
+                for (let i = 0; i < 100; i++) {
+                    ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 1, 1);
+                }
+
+                if (marsImage.complete) {
+                    ctx.drawImage(marsImage, mars.x, mars.y, mars.width, mars.height);
+                } else {
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(mars.x, mars.y, mars.width, mars.height);
+                }
+
+                // Draw rotated rocket
+                ctx.save();
+                ctx.translate(rocket.x + rocket.width/2, rocket.y + rocket.height/2);
+                ctx.rotate(rocket.angle + Math.PI / 2);
+                if (rocketImage.complete) {
+                    ctx.drawImage(rocketImage, -rocket.width/2, -rocket.height/2, rocket.width, rocket.height);
+                } else {
+                    ctx.fillStyle = 'silver';
+                    ctx.fillRect(-rocket.width/2, -rocket.height/2, rocket.width, rocket.height);
+                }
+                ctx.restore();
+
+                ctx.fillStyle = 'yellow';
+                missiles.forEach(missile => {
+                    ctx.fillRect(missile.x - missile.width/2, missile.y - missile.height/2, missile.width, missile.height);
+                });
+
+                obstacles.forEach(obstacle => drawAsteroid(obstacle));
+                fragments.forEach(fragment => drawFragment(fragment));
+                powerUps.forEach(powerUp => drawPowerUp(powerUp));
+
+                ctx.fillStyle = 'white';
+                ctx.font = '20px Arial';
+                ctx.fillText(`Score: ${score}`, 10, 30);
+                ctx.fillText(`High Score: ${highScore}`, 10, 55);
+
+                drawEnergyBar();
+                drawFuelBar();
+                drawHealthBar();
+
+                // Draw power-up message
+                if (powerUpMessage) {
+                    ctx.fillStyle = 'white';
+                    ctx.font = '20px Arial';
+                    ctx.fillText(powerUpMessage, canvas.width / 2 - 50, canvas.height / 2 - 100);
+                }
+
+                if (gameState === 'gameOver') {
+                    if (missionSuccess) {
+                        if (namePrompt.style.display === 'none') {
+                            ctx.fillStyle = 'green';
+                            ctx.font = '40px Arial';
+                            ctx.fillText('Mission Success!', canvas.width/2 - 140, canvas.height/2 - 50);
+                            ctx.font = '20px Arial';
+                            ctx.fillText(`Score: ${score}`, canvas.width/2 - 50, canvas.height/2 - 10);
+                            ctx.fillText(`High Score: ${highScore}`, canvas.width/2 - 70, canvas.height/2 + 20);
+                            
+                            if (elonImage.complete) {
+                                ctx.drawImage(elonImage, canvas.width/2 - 100, canvas.height/2 + 40, 200, 200);
+                            } else {
+                                ctx.fillStyle = 'gray';
+                                ctx.fillRect(canvas.width/2 - 100, canvas.height/2 + 40, 200, 200);
+                            }
+                            ctx.fillText('Press space bar to return', canvas.width/2 - 120, canvas.height/2 + 250);
+                        }
+                    } else if (namePrompt.style.display === 'none') {
+                        ctx.fillStyle = 'red';
+                        ctx.font = '40px Arial';
+                        ctx.fillText('Game Over', canvas.width/2 - 100, canvas.height/2);
+                        ctx.font = '20px Arial';
+                        ctx.fillText('Press space bar to return', canvas.width/2 - 120, canvas.height/2 + 40);
+                    }
+                }
+            }
+        }
+
+        function resetGame() {
+            rocket.x = 400;
+            rocket.y = 500;
+            rocket.dx = 0;
+            rocket.dy = 0;
+            rocket.angle = -Math.PI / 2;
+            obstacles = [];
+            missiles = [];
+            fragments = [];
+            powerUps = [];
+            score = 0;
+            laserCharge = 100;
+            fuelLevel = 50;
+            fuelTimer = 0;
+            health = 100;
+            doubleLaserActive = false;
+            doubleLaserTimer = 0;
+            powerUpMessage = '';
+            powerUpMessageTimer = 0;
+            nameSubmitted = false;
+            mars.width = mars.baseWidth;
+            mars.height = mars.baseHeight;
+            mars.radius = mars.baseWidth / 2;
+            mars.x = 350;
+            mars.y = -50;
+            missionSuccess = false;
+            namePrompt.style.display = 'none';
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
